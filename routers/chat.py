@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request, Body, HTTPException
 from datetime import datetime
-from models import Chat, AgentState
-from langchain_core.messages import HumanMessage
+from models import Chat
+from agents.learning_agent import run_learning_agent
 from bson import ObjectId
 from pydantic import BaseModel
 
@@ -24,38 +24,32 @@ def serialize(doc):
 @router.post("/agent", status_code=200)
 async def chat_with_agent(request: Request, agent_req: AgentRequest = Body(...)):
     """
-    Invoke the LangGraph agent workflow with just userId.
-    The agent will check goals and either:
-    - Return a message asking user to set goals (if no goals)
-    - Return a summary of goals (if goals exist)
+    Invoke the learning agent for a user.
+    The agent will:
+    1. Check if user has goals
+    2. If no goals, ask them to set goals
+    3. If goals exist, fetch project tasks and assign 3 relevant tasks
+    4. Return the response
     """
     db = request.app.state.db
-    agent = request.app.state.agent
     user_id = agent_req.userId
 
     print(f"🚀 Agent invoked for user: {user_id}")
 
-    # Prepare the initial state for LangGraph
-    initial_state = {
-        "userId": user_id,
-        "message": "",  # No user message in this workflow
-        "messages": [],  # Empty initially
-        "goals": [],  # Will be populated by the 'supervisor' node
-        "active_task": None,
-        "response_text": ""
-    }
-
-    # Run the Agent Workflow
+    # Run the Agent
     try:
-        print("⚙️ Invoking LangGraph workflow...")
-        final_state = await agent.ainvoke(initial_state)
-        print("✅ Workflow completed successfully")
+        print("⚙️ Running learning agent...")
+        result = await run_learning_agent(db, user_id)
+        agent_response = result.get("response_text", "I couldn't process your request.")
+        status = result.get("status", "error")
+        
+        print(f"✅ Agent completed with status: {status}")
     except Exception as e:
         print(f"❌ Agent Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Agent Error: {str(e)}")
-
-    # Extract the agent's response
-    agent_response = final_state.get("response_text", "I'm sorry, I couldn't process that.")
+        import traceback
+        traceback.print_exc()
+        agent_response = f"An error occurred: {str(e)}"
+        status = "error"
 
     # Store the agent's response in chat history
     agent_chat_doc = {
